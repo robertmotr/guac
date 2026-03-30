@@ -641,12 +641,21 @@ guac_status_t _guac_unhook_hwbp(guac_handle_t handle)
 GUAC_API 
 guac_options_t guac_default_options(void)
 {
+#if defined(__cplusplus)
+    guac_options_t opts{};
+    opts.hook_method             = GUAC_METHOD_HWBP;
+    opts.suspend_current_thread  = true;
+    opts.suspend_all_threads     = true;
+    opts.flush_instruction_cache = true;
+    return opts;
+#else
     return (guac_options_t) {
         .hook_method             = GUAC_METHOD_HWBP,
-        .suspend_current_thread  = true,
-        .suspend_all_threads     = true,
-        .flush_instruction_cache = true,
+        .suspend_current_thread  = 1,
+        .suspend_all_threads     = 1,
+        .flush_instruction_cache = 1,
     };
+#endif
 }
 
 GUAC_API 
