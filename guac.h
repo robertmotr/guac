@@ -112,9 +112,19 @@ guac_status_t guac_unhook(
 GUAC_API 
 guac_options_t guac_default_options(void);
 
-GUAC_API 
+GUAC_API
 const char* guac_status_string(
     guac_status_t status
+);
+
+GUAC_API
+guac_status_t guac_gate_enter(
+    guac_handle_t   *handle
+);
+
+GUAC_API
+guac_status_t guac_gate_exit(
+    guac_handle_t   *handle
 );
 
 #ifdef __cplusplus
@@ -234,10 +244,11 @@ typedef ULONG    (NTAPI *guac__fn_RtlRemoveVEH)(PVOID);
 
 typedef struct
 {
-    void*   address;
-    void*   detour;
-    int     dr_index;   // dr0-3
-    bool    active;
+    void*           address;
+    void*           detour;
+    int             dr_index;   // dr0-3
+    bool            active;
+    volatile bool   bypassed;   // when true, VEH lets the original execute
 } guac__hwbp_slot_t;
 
 static struct
@@ -412,6 +423,13 @@ LONG CALLBACK _guac_veh_handler(EXCEPTION_POINTERS* ep)
     for (int i = 0; i < GUAC__MAX_HWBP; i++) {
         if (!g_guac.hwbp[i].active)  continue;
         if (g_guac.hwbp[i].address != fault_addr) continue;
+
+        /* gate bypass: let the original function execute without redirecting */
+        if (g_guac.hwbp[i].bypassed) {
+            GUAC_LOG_DEBUG("VEH: slot DR%d bypassed, letting original run at %p", i, fault_addr);
+            ep->ContextRecord->EFlags |= 0x10000;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
 
         GUAC_LOG_DEBUG("VEH: matched slot DR%d (%p -> %p), redirecting", i, fault_addr, g_guac.hwbp[i].detour);
 
@@ -733,7 +751,41 @@ guac_status_t guac_unhook(guac_handle_t *handle)
     return status;
 }
 
-GUAC_API 
+GUAC_API
+guac_status_t guac_gate_enter(guac_handle_t *handle)
+{
+    if (!handle || *handle == GUAC_INVALID_HANDLE) {
+        GUAC_LOG_ERROR("guac_gate_enter: invalid handle");
+        return GUAC_ERROR_INVALID_ARG;
+    }
+    if (*handle < 0 || *handle >= GUAC__MAX_HWBP || !g_guac.hwbp[*handle].active) {
+        GUAC_LOG_ERROR("guac_gate_enter: handle %d is not active", *handle);
+        return GUAC_ERROR_NOT_HOOKED;
+    }
+
+    g_guac.hwbp[*handle].bypassed = true;
+    GUAC_LOG_DEBUG("gate_enter: slot DR%d bypassed", *handle);
+    return GUAC_ERROR_NONE;
+}
+
+GUAC_API
+guac_status_t guac_gate_exit(guac_handle_t *handle)
+{
+    if (!handle || *handle == GUAC_INVALID_HANDLE) {
+        GUAC_LOG_ERROR("guac_gate_exit: invalid handle");
+        return GUAC_ERROR_INVALID_ARG;
+    }
+    if (*handle < 0 || *handle >= GUAC__MAX_HWBP || !g_guac.hwbp[*handle].active) {
+        GUAC_LOG_ERROR("guac_gate_exit: handle %d is not active", *handle);
+        return GUAC_ERROR_NOT_HOOKED;
+    }
+
+    g_guac.hwbp[*handle].bypassed = false;
+    GUAC_LOG_DEBUG("gate_exit: slot DR%d re-armed", *handle);
+    return GUAC_ERROR_NONE;
+}
+
+GUAC_API
 const char* guac_status_string(guac_status_t status)
 {
     switch (status) {
